@@ -31,7 +31,7 @@ jobs:
           claude_args: "--dangerously-skip-permissions"
 
           # Fixed prompt for scheduled execution
-          direct_prompt: |
+          prompt: |
             You are an automated content generator running on a schedule.
 
             ## Task

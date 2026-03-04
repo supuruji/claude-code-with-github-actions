@@ -61,7 +61,7 @@ jobs:
             --mcp-config /tmp/mcp-config.json
             --dangerously-skip-permissions
 
-          direct_prompt: |
+          prompt: |
             You are a web research agent with Chrome DevTools access.
 
             ## Task

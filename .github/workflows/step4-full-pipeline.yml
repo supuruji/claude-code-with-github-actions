@@ -60,7 +60,7 @@ jobs:
             --mcp-config /tmp/mcp-config.json
             --dangerously-skip-permissions
 
-          direct_prompt: |
+          prompt: |
             You are an automated content pipeline orchestrator.
             You have access to Skills and Subagents defined in .claude/ directory.
 
