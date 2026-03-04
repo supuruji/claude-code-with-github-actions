@@ -1,0 +1,62 @@
+name: "Step 2 - Scheduled Automation"
+
+# Cron-based automation: Claude runs on a schedule and commits results.
+# No server, no mini-PC needed. GitHub Actions = free compute!
+
+on:
+  # Run every 6 hours (customize as needed)
+  schedule:
+    - cron: "0 */6 * * *"
+
+  # Also allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  generate-content:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # Needed for git push
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # Full history for git operations
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--dangerously-skip-permissions"
+
+          # Fixed prompt for scheduled execution
+          direct_prompt: |
+            You are an automated content generator running on a schedule.
+
+            ## Task
+            Generate a brief daily tech insight about a trending topic in AI/software development.
+
+            ## Steps
+            1. Use WebSearch to find a current trending topic in AI or software development
+            2. Write a concise insight (200-300 words) in markdown format
+            3. Save it as: output/tech-insight-$(date +%Y-%m-%d_%H%M).md
+            4. The file should include:
+               - Title
+               - Date
+               - Key insight
+               - Why it matters
+               - Source links
+            5. Run these git commands:
+               ```
+               git config user.name "Claude Code Bot"
+               git config user.email "claude-bot@github-actions"
+               git add output/
+               git commit -m "Add tech insight: $(date +%Y-%m-%d)"
+               git push origin main
+               ```
+
+            ## Important
+            - Be factual and cite sources
+            - Keep it concise and valuable
+            - Ensure the markdown is well-formatted

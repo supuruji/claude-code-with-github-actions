@@ -1,0 +1,316 @@
+# =============================================================================
+# Claude Code Action - Full Reference Workflow
+# =============================================================================
+# A comprehensive workflow combining multiple triggers, MCP servers, structured
+# multi-step prompts, and git automation. Use this as a starting point and
+# remove sections you don't need.
+#
+# Features:
+#   - Multiple triggers: schedule, manual dispatch, and issue comments
+#   - MCP servers: sequential-thinking, fetch, chrome-devtools
+#   - Structured prompt with STEP markers for complex multi-step tasks
+#   - Automatic git commit and push of results
+#   - Configurable model, timeout, and max turns
+#
+# Prerequisites:
+#   - ANTHROPIC_API_KEY secret in repo settings
+#   - Repository branch protection configured appropriately
+# =============================================================================
+
+name: Claude Code (Full)
+
+# =============================================================================
+# TRIGGERS
+# =============================================================================
+# CUSTOMIZE: Enable or disable triggers by commenting/uncommenting sections.
+# Each trigger type serves a different use case:
+#   - schedule:          Recurring automated tasks (audits, updates, reports)
+#   - workflow_dispatch: On-demand manual runs with custom prompts
+#   - issue_comment:     Invoke Claude by commenting on issues/PRs
+# =============================================================================
+on:
+  # ---------------------------------------------------------------------------
+  # Trigger 1: Cron Schedule
+  # CUSTOMIZE: Adjust the schedule or remove this section if not needed.
+  # ---------------------------------------------------------------------------
+  schedule:
+    - cron: "0 9 * * 1"  # Every Monday at 09:00 UTC
+
+  # ---------------------------------------------------------------------------
+  # Trigger 2: Manual Dispatch
+  # Provides input fields in the GitHub Actions UI for ad-hoc runs.
+  # ---------------------------------------------------------------------------
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt for Claude Code"
+        required: true
+        type: string
+      model:
+        description: "Model to use"
+        required: false
+        default: "claude-sonnet-4-20250514"
+        type: choice
+        options:
+          - claude-sonnet-4-20250514
+          - claude-opus-4-20250514
+      max_turns:
+        description: "Maximum conversation turns"
+        required: false
+        default: "30"
+        type: string
+
+  # ---------------------------------------------------------------------------
+  # Trigger 3: Issue/PR Comment
+  # Claude responds when someone comments with a specific prefix.
+  # CUSTOMIZE: Change the trigger phrase in the job condition below.
+  # ---------------------------------------------------------------------------
+  issue_comment:
+    types: [created]
+
+# =============================================================================
+# PERMISSIONS
+# =============================================================================
+# CUSTOMIZE: Adjust permissions based on what Claude needs to do.
+#   - contents:write     Required for git push
+#   - issues:write       Required for commenting on issues
+#   - pull-requests:write Required for commenting on PRs
+# =============================================================================
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# =============================================================================
+# CONCURRENCY
+# =============================================================================
+# Prevents multiple Claude runs from conflicting with each other.
+# CUSTOMIZE: Change the group name if you have multiple Claude workflows.
+# =============================================================================
+concurrency:
+  group: claude-code-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+
+    # -------------------------------------------------------------------------
+    # CUSTOMIZE: Timeout for the entire job. Increase for complex tasks.
+    # -------------------------------------------------------------------------
+    timeout-minutes: 45
+
+    # -------------------------------------------------------------------------
+    # Condition: Only run on issue_comment if the comment starts with "@claude"
+    # CUSTOMIZE: Change the trigger phrase as needed.
+    # -------------------------------------------------------------------------
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       startsWith(github.event.comment.body, '@claude'))
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # Use the default GITHUB_TOKEN for push access
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Step 2: Configure Git
+      # Sets up the git identity for any commits Claude makes.
+      # -----------------------------------------------------------------------
+      - name: Configure git identity
+        run: |
+          git config user.name "claude-code[bot]"
+          git config user.email "claude-code[bot]@users.noreply.github.com"
+
+      # -----------------------------------------------------------------------
+      # Step 3: Set up headless Chrome
+      # Required by the chrome-devtools MCP server.
+      # CUSTOMIZE: Remove this step if you don't need browser automation.
+      # -----------------------------------------------------------------------
+      - name: Start headless Chrome
+        run: |
+          if ! command -v google-chrome &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y google-chrome-stable
+          fi
+
+          google-chrome \
+            --headless=new \
+            --disable-gpu \
+            --no-sandbox \
+            --disable-dev-shm-usage \
+            --remote-debugging-port=9222 \
+            --window-size=1920,1080 \
+            &
+
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9222/json/version > /dev/null 2>&1; then
+              echo "Chrome is ready."
+              break
+            fi
+            sleep 1
+          done
+
+      # -----------------------------------------------------------------------
+      # Step 4: Create MCP configuration
+      # CUSTOMIZE: Add or remove MCP servers based on your needs.
+      # -----------------------------------------------------------------------
+      - name: Create MCP config
+        run: |
+          cat > /tmp/mcp-config.json << 'EOF'
+          {
+            "mcpServers": {
+              "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/mcp-sequential-thinking"]
+              },
+              "fetch": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/mcp-fetch"]
+              },
+              "chrome-devtools": {
+                "command": "npx",
+                "args": [
+                  "-y",
+                  "@anthropic-ai/mcp-chrome-devtools",
+                  "--headless"
+                ]
+              }
+            }
+          }
+          EOF
+
+      # -----------------------------------------------------------------------
+      # Step 5: Determine the prompt
+      #
+      # Priority:
+      #   1. workflow_dispatch input (manual runs)
+      #   2. Issue comment body (minus the @claude prefix)
+      #   3. Default scheduled prompt (defined below)
+      #
+      # CUSTOMIZE: Edit the DEFAULT_PROMPT for your recurring task.
+      # -----------------------------------------------------------------------
+      - name: Determine prompt
+        id: prompt
+        env:
+          DISPATCH_PROMPT: ${{ github.event.inputs.prompt }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          if [ -n "$DISPATCH_PROMPT" ]; then
+            echo "source=dispatch" >> "$GITHUB_OUTPUT"
+            # Write multi-line prompt to a file to preserve formatting
+            echo "$DISPATCH_PROMPT" > /tmp/claude-prompt.txt
+          elif [ -n "$COMMENT_BODY" ]; then
+            echo "source=comment" >> "$GITHUB_OUTPUT"
+            # Strip the @claude prefix from the comment
+            echo "$COMMENT_BODY" | sed 's/^@claude\s*//' > /tmp/claude-prompt.txt
+          else
+            echo "source=schedule" >> "$GITHUB_OUTPUT"
+            # -----------------------------------------------------------------
+            # CUSTOMIZE: Default prompt for scheduled runs.
+            #
+            # This structured prompt uses STEP markers to guide Claude through
+            # a complex multi-step task. Each STEP is a discrete unit of work.
+            # Claude will execute them sequentially.
+            #
+            # Tips for writing effective STEP-based prompts:
+            #   - Be specific about inputs and expected outputs
+            #   - Include validation/verification steps
+            #   - End with a commit step if changes should be persisted
+            # -----------------------------------------------------------------
+            cat > /tmp/claude-prompt.txt << 'PROMPT'
+          You are performing a scheduled maintenance task on this repository.
+          Execute the following steps in order:
+
+          STEP 1 - ANALYZE
+          Scan the codebase for potential issues:
+          - Check for TODO/FIXME/HACK comments and list them
+          - Look for outdated dependency versions
+          - Identify any files that have not been modified in over 6 months
+          Write your findings to /tmp/analysis.md (this is for your reference only).
+
+          STEP 2 - UPDATE
+          Based on your analysis:
+          - Update any dependencies that have safe patch-level updates
+          - Run the test suite to verify nothing is broken
+          - If tests fail, revert the problematic updates
+
+          STEP 3 - DOCUMENT
+          Create or update docs/maintenance-log.md with:
+          - Date and summary of changes made
+          - List of dependencies updated (old version -> new version)
+          - Any issues found that require human attention
+
+          STEP 4 - COMMIT
+          If any files were modified:
+          - Stage all changed files
+          - Create a commit with the message: "chore: scheduled maintenance [skip ci]"
+          - Push to the current branch
+
+          If no changes were needed, note this in the maintenance log.
+          PROMPT
+          fi
+
+          echo "Prompt source: $(cat "$GITHUB_OUTPUT" | grep source | cut -d= -f2)"
+          echo "--- Prompt content ---"
+          cat /tmp/claude-prompt.txt
+
+      # -----------------------------------------------------------------------
+      # Step 6: Run Claude Code
+      # CUSTOMIZE: Adjust model, max_turns, and allowed_tools as needed.
+      # -----------------------------------------------------------------------
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          direct_prompt_file: /tmp/claude-prompt.txt
+
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # -------------------------------------------------------------------
+          # CUSTOMIZE: Model selection
+          # Use dispatch input if available, otherwise default to Sonnet
+          # -------------------------------------------------------------------
+          model: ${{ github.event.inputs.model || 'claude-sonnet-4-20250514' }}
+
+          # -------------------------------------------------------------------
+          # CUSTOMIZE: Allowed tools
+          # List every tool Claude is permitted to use. Be explicit rather than
+          # using --dangerously-skip-permissions for better security.
+          # -------------------------------------------------------------------
+          allowed_tools: "Bash,Read,Write,Edit,Glob,Grep,mcp__sequential-thinking__sequentialthinking,mcp__fetch__fetch,mcp__chrome-devtools__take_screenshot,mcp__chrome-devtools__click,mcp__chrome-devtools__fill,mcp__chrome-devtools__navigate_page,mcp__chrome-devtools__take_snapshot"
+
+          # Pass MCP config and any additional flags
+          claude_args: "--mcp-config /tmp/mcp-config.json"
+
+          max_turns: ${{ github.event.inputs.max_turns || '30' }}
+
+      # -----------------------------------------------------------------------
+      # Step 7: Post results to issue/PR (only for comment-triggered runs)
+      # CUSTOMIZE: Adjust the comment format or add additional reporting.
+      # -----------------------------------------------------------------------
+      - name: Post result to issue
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conclusion = '${{ steps.claude.outcome }}';
+            const body = conclusion === 'success'
+              ? '**Claude Code** completed the task successfully.'
+              : '**Claude Code** encountered an issue. Check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

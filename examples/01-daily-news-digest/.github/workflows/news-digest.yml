@@ -1,0 +1,145 @@
+name: Daily News Digest
+
+on:
+  schedule:
+    # Run daily at 8 AM UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  generate-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout Repository ──────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node.js ────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install Claude Code ──────────────────────────────
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # ── 4. Setup Chrome ────────────────────────────────────
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@latest
+        with:
+          chrome-version: stable
+
+      - name: Launch Chrome with Remote Debugging
+        run: |
+          chrome \
+            --headless=new \
+            --disable-gpu \
+            --no-sandbox \
+            --remote-debugging-port=9222 \
+            --window-size=1920,1080 \
+            &
+          # Wait for Chrome to be ready
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9222/json/version > /dev/null 2>&1; then
+              echo "Chrome is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      # ── 5. Install MCP Servers ─────────────────────────────
+      - name: Install MCP Servers
+        run: |
+          npm install -g \
+            @anthropic-ai/claude-code-mcp-server-fetch@latest \
+            @anthropic-ai/claude-code-mcp-server-sequential-thinking@latest
+
+      # ── 6. Configure MCP ───────────────────────────────────
+      - name: Configure MCP Servers
+        run: |
+          mkdir -p ~/.claude
+          cat > ~/.claude/mcp_servers.json << 'EOF'
+          {
+            "mcpServers": {
+              "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/claude-code-mcp-server-sequential-thinking"]
+              },
+              "fetch": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/claude-code-mcp-server-fetch"]
+              },
+              "chrome-devtools": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/claude-code-mcp-server-chrome-devtools@latest"],
+                "env": {
+                  "CDP_ENDPOINT": "http://localhost:9222"
+                }
+              }
+            }
+          }
+          EOF
+
+      # ── 7. Run Claude Code ─────────────────────────────────
+      - name: Generate News Digest
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+
+          claude -p \
+            --dangerously-skip-permissions \
+            --allowedTools "mcp__chrome-devtools__*,mcp__fetch__*,mcp__sequential-thinking__*,Read,Write,Bash,Glob,Grep" \
+            --agent news-curator \
+            "Today is ${DATE}. Generate a daily tech news digest.
+
+            ## Instructions
+
+            1. **Check for duplicates**: Run the duplicate checker script:
+               \`python3 .claude/skills/news-digest-generator/scripts/check_duplicates.py output/\`
+
+            2. **Visit Hacker News** (https://news.ycombinator.com):
+               - Use chrome-devtools to navigate and take a snapshot
+               - Extract the top 15 headlines with URLs and point counts
+               - Take a screenshot and save to output/screenshots/${DATE}-hn.png
+
+            3. **Visit TechCrunch** (https://techcrunch.com):
+               - Use chrome-devtools to navigate and take a snapshot
+               - Extract the top 10 headlines with URLs and authors
+               - Take a screenshot and save to output/screenshots/${DATE}-tc.png
+
+            4. **Analyze and Generate Digest**:
+               - Use sequential-thinking to identify 3-5 emerging trends
+               - Cross-reference stories between sources
+               - Categorize stories (AI, Web, Security, Startups, etc.)
+
+            5. **Write Output**:
+               - Read the template from .claude/skills/news-digest-generator/assets/template.md
+               - Generate the digest following the template format
+               - Save to output/${DATE}-digest.md
+
+            6. **Quality Check**:
+               - Verify all URLs are valid
+               - Ensure no duplicate headlines from previous digests
+               - Confirm the digest has at least 15 stories total"
+
+      # ── 8. Commit and Push ─────────────────────────────────
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "chore: add daily news digest for ${DATE}"
+            git push
+          fi

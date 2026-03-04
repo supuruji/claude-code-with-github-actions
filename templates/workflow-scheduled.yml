@@ -1,0 +1,99 @@
+# =============================================================================
+# Claude Code Action - Scheduled Workflow
+# =============================================================================
+# Runs Claude Code on a cron schedule to perform recurring tasks such as
+# dependency updates, code audits, documentation refreshes, or data syncs.
+#
+# Claude commits and pushes results directly to the repository.
+#
+# Template Variables (customize these):
+#   - Cron schedule:   Line 25  (default: daily at 09:00 UTC)
+#   - Branch:          Line 31  (default: main)
+#   - Prompt:          Line 55  (the task Claude performs each run)
+#   - Timeout:         Line 39  (default: 30 minutes)
+#
+# Prerequisites:
+#   - ANTHROPIC_API_KEY secret set in repo settings
+#   - Repository has appropriate branch protection rules
+# =============================================================================
+
+name: Claude Code (Scheduled)
+
+on:
+  # -------------------------------------------------------------------------
+  # CUSTOMIZE: Adjust the cron schedule to your needs
+  # Format: minute hour day-of-month month day-of-week
+  # Examples:
+  #   "0 9 * * 1"    = Every Monday at 09:00 UTC
+  #   "0 */6 * * *"  = Every 6 hours
+  #   "0 9 1 * *"    = First day of every month at 09:00 UTC
+  # -------------------------------------------------------------------------
+  schedule:
+    - cron: "0 9 * * *"
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      prompt_override:
+        description: "Override the default prompt (leave empty to use default)"
+        required: false
+        type: string
+
+permissions:
+  # Required for git push
+  contents: write
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    # -------------------------------------------------------------------------
+    # CUSTOMIZE: Adjust timeout based on expected task duration
+    # -------------------------------------------------------------------------
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # -------------------------------------------------------------------------
+          # CUSTOMIZE: Target branch for checkout and push
+          # -------------------------------------------------------------------------
+          ref: main
+          # Fetch full history if Claude needs git log context
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "claude-code[bot]"
+          git config user.email "claude-code[bot]@users.noreply.github.com"
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          # -----------------------------------------------------------------------
+          # CUSTOMIZE: Replace this prompt with your recurring task.
+          #
+          # Examples:
+          #   - "Review all TODO comments and create a summary in docs/todos.md"
+          #   - "Check for outdated npm dependencies and update patch versions"
+          #   - "Run the test suite and fix any failing tests"
+          #   - "Audit the codebase for security anti-patterns"
+          # -----------------------------------------------------------------------
+          direct_prompt: |
+            ${{ github.event.inputs.prompt_override || 'Check for outdated dependencies. Update any that have patch or minor version updates available. Run tests to verify nothing breaks. If all tests pass, commit the changes with a descriptive message and push to the current branch.' }}
+
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # -----------------------------------------------------------------------
+          # CUSTOMIZE: Model selection
+          # Options: claude-sonnet-4-20250514, claude-opus-4-20250514
+          # -----------------------------------------------------------------------
+          model: "claude-sonnet-4-20250514"
+
+          allowed_tools: "Bash,Read,Write,Edit,Glob,Grep"
+
+          # -----------------------------------------------------------------------
+          # CUSTOMIZE: Max turns controls how many tool-use rounds Claude can take.
+          # Increase for complex multi-step tasks.
+          # -----------------------------------------------------------------------
+          max_turns: "25"

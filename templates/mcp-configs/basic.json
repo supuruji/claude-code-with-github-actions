@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-sequential-thinking"]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-fetch"]
+    }
+  }
+}

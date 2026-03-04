@@ -1,0 +1,138 @@
+name: Weekly Repo Health Check
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ── 1. Checkout Repository ──────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git analysis
+
+      # ── 2. Setup Node.js ────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install Claude Code ──────────────────────────────
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # ── 4. Run Health Check ─────────────────────────────────
+      - name: Analyze Repository Health
+        id: health-check
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+
+          claude -p \
+            --dangerously-skip-permissions \
+            --agent repo-analyst \
+            --output-format json \
+            "Perform a comprehensive health check on this repository. Today is ${DATE}.
+
+            ## Analysis Steps
+
+            ### 1. Dependency Analysis
+            - Check package.json, requirements.txt, Cargo.toml, go.mod, or equivalent
+            - Identify packages that may be outdated (check for lock files and version constraints)
+            - Look for unused dependencies (imported but never used in source)
+            - Note any pinned versions that should be ranges or vice versa
+
+            ### 2. Documentation Review
+            - Check if README.md exists and has key sections (install, usage, contributing)
+            - Look for functions/classes lacking docstrings or JSDoc comments
+            - Check if API endpoints have documentation
+            - Verify CHANGELOG or release notes exist if applicable
+            - Look for stale documentation referencing removed features
+
+            ### 3. Code Quality Scan
+            - Find functions longer than 50 lines
+            - Identify deeply nested code (4+ levels)
+            - Count TODO, FIXME, HACK, XXX comments
+            - Look for duplicated code blocks
+            - Check for consistent naming conventions
+            - Identify dead code (unused exports, unreachable branches)
+
+            ### 4. Test Coverage Gaps
+            - Check if test files exist for each source module
+            - Look for test files with skipped/disabled tests
+            - Identify complex functions without corresponding tests
+            - Check for test configuration files
+
+            ### 5. Security Review
+            - Scan for hardcoded secrets, API keys, tokens (regex patterns)
+            - Check .gitignore for common sensitive file patterns
+            - Look for unsafe patterns (eval, innerHTML, SQL string concat)
+            - Verify environment variable usage for configuration
+
+            ### 6. Repository Hygiene
+            - Check for files larger than 1MB that should use Git LFS
+            - Look for binary files committed to the repo
+            - Verify .editorconfig or formatting config exists
+            - Check for CI/CD configuration
+
+            ## Output Format
+
+            Write your findings to a file called /tmp/health-report.md using this format:
+
+            # Repository Health Report - YYYY-MM-DD
+
+            ## Summary
+            - Overall Health: [Good/Fair/Needs Attention]
+            - Critical Issues: [count]
+            - Warnings: [count]
+            - Suggestions: [count]
+
+            ## Critical Issues
+            (list each with file path and description)
+
+            ## Warnings
+            (list each with file path and description)
+
+            ## Suggestions
+            (list each with description)
+
+            ## Metrics
+            | Metric | Value |
+            |--------|-------|
+            | Total files scanned | X |
+            | TODO/FIXME count | X |
+            | Functions > 50 lines | X |
+            | Missing test files | X |
+
+            Be thorough but pragmatic. Focus on actionable findings."
+
+      # ── 5. Create GitHub Issue ──────────────────────────────
+      - name: Create Health Report Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+
+          if [ -f /tmp/health-report.md ]; then
+            REPORT=$(cat /tmp/health-report.md)
+          else
+            REPORT="Health check completed but no report file was generated. Check the workflow logs for details."
+          fi
+
+          gh issue create \
+            --title "Repository Health Report - ${DATE}" \
+            --body "${REPORT}" \
+            --label "maintenance,automated"

@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-sequential-thinking"]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-fetch"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic-ai/mcp-filesystem",
+        "--allow-read", "/workspace",
+        "--allow-write", "/workspace/output"
+      ]
+    }
+  }
+}

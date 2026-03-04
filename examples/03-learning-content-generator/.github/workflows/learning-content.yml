@@ -1,0 +1,186 @@
+name: Learning Content Generator
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      word_count:
+        description: 'Number of vocabulary words to generate'
+        required: false
+        default: '10'
+      difficulty:
+        description: 'Difficulty level (beginner, intermediate, advanced)'
+        required: false
+        default: 'intermediate'
+
+permissions:
+  contents: write
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  generate-content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout Repository ──────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node.js ────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Setup Python ────────────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ── 4. Install Claude Code ──────────────────────────────
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # ── 5. Setup Chrome ────────────────────────────────────
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@latest
+        with:
+          chrome-version: stable
+
+      - name: Launch Chrome with Remote Debugging
+        run: |
+          chrome \
+            --headless=new \
+            --disable-gpu \
+            --no-sandbox \
+            --remote-debugging-port=9222 \
+            --window-size=1920,1080 \
+            &
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9222/json/version > /dev/null 2>&1; then
+              echo "Chrome is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      # ── 6. Install MCP Servers ─────────────────────────────
+      - name: Install MCP Servers
+        run: |
+          npm install -g \
+            @anthropic-ai/claude-code-mcp-server-fetch@latest \
+            @anthropic-ai/claude-code-mcp-server-sequential-thinking@latest
+
+      # ── 7. Configure MCP ───────────────────────────────────
+      - name: Configure MCP Servers
+        run: |
+          mkdir -p ~/.claude
+          cat > ~/.claude/mcp_servers.json << 'EOF'
+          {
+            "mcpServers": {
+              "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/claude-code-mcp-server-sequential-thinking"]
+              },
+              "fetch": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/claude-code-mcp-server-fetch"]
+              },
+              "chrome-devtools": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/claude-code-mcp-server-chrome-devtools@latest"],
+                "env": {
+                  "CDP_ENDPOINT": "http://localhost:9222"
+                }
+              }
+            }
+          }
+          EOF
+
+      # ── 8. Run Claude Code ─────────────────────────────────
+      - name: Generate Vocabulary Content
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%d-%H)
+          WORD_COUNT="${{ github.event.inputs.word_count || '10' }}"
+          DIFFICULTY="${{ github.event.inputs.difficulty || 'intermediate' }}"
+
+          claude -p \
+            --dangerously-skip-permissions \
+            --allowedTools "mcp__chrome-devtools__*,mcp__fetch__*,mcp__sequential-thinking__*,Read,Write,Bash,Glob,Grep" \
+            --agent content-specialist \
+            "Generate vocabulary learning content. Timestamp: ${TIMESTAMP}. Word count: ${WORD_COUNT}. Difficulty: ${DIFFICULTY}.
+
+            ## Step 1: Duplicate Check
+            Run the duplicate checker to get the list of words already covered:
+            \`\`\`
+            python3 .claude/skills/vocabulary-generator/scripts/check_duplicates.py output/
+            \`\`\`
+            Do NOT include any words from the duplicate list.
+
+            ## Step 2: Web Research
+            Research current vocabulary usage to find relevant, practical words:
+            - Use chrome-devtools to visit an English dictionary or vocabulary resource
+            - Look for words commonly used in business, technology, and academic contexts
+            - Focus on ${DIFFICULTY}-level words (see references/vocabulary-guide.md)
+            - Take note of real-world usage examples
+
+            ## Step 3: Word Selection
+            Read the vocabulary guide at:
+            \`.claude/skills/vocabulary-generator/references/vocabulary-guide.md\`
+
+            Select ${WORD_COUNT} words that:
+            - Match the ${DIFFICULTY} difficulty level criteria
+            - Are NOT in the duplicate list from Step 1
+            - Have practical usage in professional/academic contexts
+            - Cover a mix of parts of speech (nouns, verbs, adjectives, adverbs)
+
+            ## Step 4: Content Generation
+            For each selected word, generate:
+            - Clear definition(s) with part of speech
+            - Pronunciation guide (IPA notation)
+            - 2-3 example sentences showing different contexts
+            - Word family (related forms: noun, verb, adjective, adverb)
+            - Common collocations
+            - A mnemonic or learning tip
+
+            ## Step 5: Practice Questions
+            Create practice exercises:
+            - 5 multiple choice questions (choose the correct definition)
+            - 5 fill-in-the-blank sentences
+            - 5 matching exercises (word to definition)
+            - Include an answer key with explanations
+
+            ## Step 6: Quality Check
+            Use sequential-thinking to verify:
+            - All definitions are accurate
+            - Example sentences sound natural
+            - Practice questions have unambiguous correct answers
+            - No duplicate words from previous content
+            - Difficulty level is consistent
+
+            ## Step 7: Save Output
+            Read the template at:
+            \`.claude/skills/vocabulary-generator/assets/template.md\`
+
+            Generate the final content following the template and save to:
+            \`output/${TIMESTAMP}-vocabulary.md\`"
+
+      # ── 9. Commit and Push ─────────────────────────────────
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            TIMESTAMP=$(date -u +%Y-%m-%d-%H)
+            git commit -m "chore: add vocabulary content ${TIMESTAMP}"
+            git push
+          fi

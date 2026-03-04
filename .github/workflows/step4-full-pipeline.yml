@@ -1,0 +1,100 @@
+name: "Step 4 - Full Pipeline (Skills + Agents)"
+
+# Production-grade workflow: Skills, Subagents, MCP servers, and scheduled execution.
+# This is the pattern used in real-world Claude Code automation.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1-5"    # Weekdays at 9 AM UTC
+
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Topic for content generation (leave empty for auto-select)"
+        required: false
+        type: string
+
+jobs:
+  full-pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Chrome
+        run: google-chrome --version
+
+      - name: Create MCP Config
+        run: |
+          cat > /tmp/mcp-config.json << 'MCPEOF'
+          {
+            "mcpServers": {
+              "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+              },
+              "fetch": {
+                "command": "npx",
+                "args": ["-y", "@anthropics/mcp-server-fetch"]
+              },
+              "chrome-devtools": {
+                "command": "npx",
+                "args": ["-y", "chrome-devtools-mcp@latest", "--headless"]
+              }
+            }
+          }
+          MCPEOF
+
+      - name: Run Claude Code Full Pipeline
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --mcp-config /tmp/mcp-config.json
+            --dangerously-skip-permissions
+
+          direct_prompt: |
+            You are an automated content pipeline orchestrator.
+            You have access to Skills and Subagents defined in .claude/ directory.
+
+            ## STEP 1: Web Research
+            Use Chrome DevTools MCP to visit 2-3 relevant websites about today's AI news.
+            - Take screenshots of each page
+            - Extract key information
+            - Save screenshots to output/screenshots/
+
+            ## STEP 2: Content Generation
+            Based on your research, generate high-quality learning content:
+            - Topic: ${{ github.event.inputs.topic || 'auto-select based on trending AI topics' }}
+            - Format: Use the skill template if available in .claude/skills/
+            - Include real sources and screenshots as evidence
+
+            ## STEP 3: Quality Check
+            - Verify all links are working
+            - Check for duplicate content (run scripts/check_duplicates.py if it exists)
+            - Ensure proper markdown formatting
+
+            ## STEP 4: Save and Commit
+            Save the final content as: output/content-$(date +%Y-%m-%d_%H%M).md
+
+            Then commit and push:
+            ```
+            git config user.name "Claude Code Bot"
+            git config user.email "claude-bot@github-actions"
+            git add output/
+            git commit -m "Add AI content: $(date +%Y-%m-%d) - Full Pipeline"
+            git push origin main
+            ```
+
+            ## Important Notes
+            - Always cite your sources
+            - Include screenshot references
+            - Keep content factual and useful
+            - If any step fails, log the error and continue with remaining steps

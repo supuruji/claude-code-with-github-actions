@@ -1,0 +1,54 @@
+name: "Step 1 - Hello Claude"
+
+# The simplest possible Claude Code workflow.
+# Just fork, add your CLAUDE_CODE_OAUTH_TOKEN secret, and run!
+
+on:
+  # Manual trigger from GitHub Actions UI
+  workflow_dispatch:
+
+  # Respond when someone mentions @claude in an issue or PR comment
+  issue_comment:
+    types: [created]
+
+  # Respond to PR review comments
+  pull_request_review_comment:
+    types: [created]
+
+  # Respond when a new issue is opened
+  issues:
+    types: [opened]
+
+jobs:
+  hello-claude:
+    # Only run if manually triggered or @claude is mentioned
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Use Claude Max OAuth token (unlimited usage)
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Skip all permission prompts (safe in isolated Actions environment)
+          claude_args: "--dangerously-skip-permissions"
+
+          # For workflow_dispatch, provide a default prompt
+          direct_prompt: |
+            Analyze this repository structure and suggest improvements.
+            Be concise and helpful.

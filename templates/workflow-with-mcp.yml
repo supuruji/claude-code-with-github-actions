@@ -1,0 +1,143 @@
+# =============================================================================
+# Claude Code Action - Workflow with MCP Servers
+# =============================================================================
+# Demonstrates how to configure MCP (Model Context Protocol) servers so that
+# Claude Code gains additional capabilities:
+#
+#   - sequential-thinking: Extended chain-of-thought reasoning
+#   - fetch:              HTTP requests to external APIs / web pages
+#   - chrome-devtools:    Headless Chrome browser automation
+#
+# How it works:
+#   1. Install and start headless Chrome (for browser-based tasks)
+#   2. Generate an MCP config JSON file at runtime
+#   3. Pass --mcp-config to Claude Code via claude_args
+#
+# Prerequisites:
+#   - ANTHROPIC_API_KEY secret in repo settings
+#   - npx available on the runner (pre-installed on ubuntu-latest)
+# =============================================================================
+
+name: Claude Code (with MCP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt for Claude Code"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: Checkout the repository
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Step 2: Set up headless Chrome
+      #
+      # The chrome-devtools MCP server needs a running Chrome instance.
+      # We launch it in headless mode with remote debugging enabled on port 9222.
+      # The --no-sandbox flag is required in CI environments (Docker / GitHub Actions).
+      # -----------------------------------------------------------------------
+      - name: Start headless Chrome
+        run: |
+          # Install Chrome if not already available
+          if ! command -v google-chrome &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y google-chrome-stable
+          fi
+
+          # Launch Chrome in headless mode with remote debugging
+          google-chrome \
+            --headless=new \
+            --disable-gpu \
+            --no-sandbox \
+            --disable-dev-shm-usage \
+            --remote-debugging-port=9222 \
+            --window-size=1920,1080 \
+            &
+
+          # Wait for Chrome to be ready
+          echo "Waiting for Chrome to start..."
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9222/json/version > /dev/null 2>&1; then
+              echo "Chrome is ready."
+              break
+            fi
+            sleep 1
+          done
+
+      # -----------------------------------------------------------------------
+      # Step 3: Create MCP configuration file
+      #
+      # This JSON file tells Claude Code which MCP servers to connect to and
+      # how to start them. Each server runs as a child process via npx.
+      #
+      # Server details:
+      #   - sequential-thinking: Adds a "think" tool for multi-step reasoning
+      #   - fetch:              Adds tools to fetch URLs and extract content
+      #   - chrome-devtools:    Adds tools to control headless Chrome
+      #
+      # You can add or remove servers as needed. See the MCP specification
+      # for the full list of available community servers:
+      # https://github.com/modelcontextprotocol/servers
+      # -----------------------------------------------------------------------
+      - name: Create MCP config
+        run: |
+          cat > /tmp/mcp-config.json << 'EOF'
+          {
+            "mcpServers": {
+              "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/mcp-sequential-thinking"]
+              },
+              "fetch": {
+                "command": "npx",
+                "args": ["-y", "@anthropic-ai/mcp-fetch"]
+              },
+              "chrome-devtools": {
+                "command": "npx",
+                "args": [
+                  "-y",
+                  "@anthropic-ai/mcp-chrome-devtools",
+                  "--headless"
+                ]
+              }
+            }
+          }
+          EOF
+
+          echo "MCP config created:"
+          cat /tmp/mcp-config.json
+
+      # -----------------------------------------------------------------------
+      # Step 4: Run Claude Code with MCP servers
+      #
+      # The --mcp-config flag points Claude Code to the JSON file created above.
+      # Claude will automatically start each MCP server process and gain access
+      # to the tools they provide.
+      #
+      # Note: claude_args passes additional CLI flags to the claude command.
+      # -----------------------------------------------------------------------
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          direct_prompt: ${{ github.event.inputs.prompt }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_tools: "Bash,Read,Write,Edit,Glob,Grep,mcp__sequential-thinking__sequentialthinking,mcp__fetch__fetch,mcp__chrome-devtools__take_screenshot,mcp__chrome-devtools__click,mcp__chrome-devtools__fill,mcp__chrome-devtools__navigate_page,mcp__chrome-devtools__take_snapshot"
+
+          # Pass the MCP config file to Claude Code
+          claude_args: "--mcp-config /tmp/mcp-config.json"
+
+          max_turns: "30"

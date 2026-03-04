@@ -1,0 +1,91 @@
+name: "Step 3 - With MCP Servers"
+
+# Advanced: Claude can browse the web using Chrome DevTools MCP.
+# Visit websites, take screenshots, extract data, and generate reports.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  web-research:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Chrome is pre-installed on ubuntu-latest, but verify
+      - name: Verify Chrome installation
+        run: |
+          google-chrome --version || echo "Chrome not found, installing..."
+          if ! command -v google-chrome &> /dev/null; then
+            wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+            echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+            sudo apt-get update && sudo apt-get install -y google-chrome-stable
+          fi
+
+      # Create MCP server configuration
+      - name: Create MCP Config
+        run: |
+          cat > /tmp/mcp-config.json << 'MCPEOF'
+          {
+            "mcpServers": {
+              "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+              },
+              "fetch": {
+                "command": "npx",
+                "args": ["-y", "@anthropics/mcp-server-fetch"]
+              },
+              "chrome-devtools": {
+                "command": "npx",
+                "args": ["-y", "chrome-devtools-mcp@latest", "--headless"]
+              }
+            }
+          }
+          MCPEOF
+          echo "MCP config created:"
+          cat /tmp/mcp-config.json
+
+      - name: Run Claude Code with MCP
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --mcp-config /tmp/mcp-config.json
+            --dangerously-skip-permissions
+
+          direct_prompt: |
+            You are a web research agent with Chrome DevTools access.
+
+            ## Task
+            Visit Hacker News (https://news.ycombinator.com) and create a trend report.
+
+            ## Steps
+            1. Use Chrome DevTools MCP to navigate to https://news.ycombinator.com
+            2. Take a screenshot of the front page
+            3. Extract the top 10 headlines with their links and point counts
+            4. Use WebSearch to get additional context on the top 3 stories
+            5. Generate a markdown report saved as:
+               output/hn-report-$(date +%Y-%m-%d).md
+
+            The report should include:
+            - Screenshot reference
+            - Top 10 headlines summary table
+            - Deep dive on top 3 stories
+            - Trend analysis (what themes are emerging?)
+
+            6. Git add, commit, and push all output files:
+               ```
+               git config user.name "Claude Code Bot"
+               git config user.email "claude-bot@github-actions"
+               git add output/
+               git commit -m "Add HN trend report: $(date +%Y-%m-%d)"
+               git push origin main
+               ```

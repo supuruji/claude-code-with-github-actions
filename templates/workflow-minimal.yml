@@ -1,0 +1,50 @@
+# =============================================================================
+# Claude Code Action - Minimal Workflow
+# =============================================================================
+# The simplest possible Claude Code workflow. Triggers manually via
+# workflow_dispatch and runs Claude with full permissions (--dangerously-skip-permissions).
+#
+# Prerequisites:
+#   - ANTHROPIC_API_KEY secret set in repo settings (or use Claude OAuth below)
+#   - Appropriate model access on your Anthropic account
+#
+# Usage:
+#   Go to Actions tab > "Claude Code (Minimal)" > Run workflow > Enter your prompt
+# =============================================================================
+
+name: Claude Code (Minimal)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt for Claude Code"
+        required: true
+        type: string
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          # The prompt to send to Claude Code
+          direct_prompt: ${{ github.event.inputs.prompt }}
+
+          # Authentication: use ONE of the following
+          # Option A: Anthropic API key (set ANTHROPIC_API_KEY in repo secrets)
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Option B: Claude OAuth token (uncomment and set in repo secrets)
+          # claude_access_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
+
+          # Run without interactive permission prompts
+          # WARNING: This allows Claude to execute any tool without confirmation.
+          # Only use in trusted CI environments with controlled prompts.
+          allowed_tools: "Bash,Read,Write,Edit,Glob,Grep"
